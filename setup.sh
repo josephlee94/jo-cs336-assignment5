@@ -15,6 +15,8 @@ if ! command -v uv &>/dev/null; then
     echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.bashrc
 fi
 
+source $HOME/.local/bin/env
+
 # Make sure uv is working
 uv --version
 
