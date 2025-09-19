@@ -100,15 +100,7 @@ def make_reward_fn() -> Callable[[str, str], Dict[str, float]]:
 # Dataset loaders
 # -----------------------
 def load_math_like(path: Path) -> List[Tuple[str, str]]:
-    """
-    Accepts either:
-      • MATH-style: [{"problem": "...", "answer": "..."}, ...]
-      • GSM8K-style: [{"question": "...", "answer": "#### 42"}, ...]
-    Returns list of (prompt_text, ground_truth_answer).
-    """
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
+    data = _load_json_or_jsonl(path)
     items: List[Tuple[str, str]] = []
     for ex in data:
         if "problem" in ex and "answer" in ex:  # MATH style
@@ -117,17 +109,16 @@ def load_math_like(path: Path) -> List[Tuple[str, str]]:
         elif "question" in ex and "answer" in ex:  # GSM8K style
             q = ex["question"]
             a = ex["answer"]
-            # GSM8K 'answer' lines often look like "#### 42\n...". Keep only the canonical short answer.
             m = re.search(r"####\s*(.+)", a)
             if m:
                 a = m.group(1).strip()
         else:
-            # Try generic keys
             q = ex.get("question", ex.get("prompt", ex.get("input", "")))
             a = ex.get("answer", ex.get("output", ex.get("target", "")))
         prompt = R1_ZERO_TEMPLATE.format(question=q)
         items.append((prompt, a))
     return items
+
 
 
 # -----------------------
