@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 
 from vllm import LLM, SamplingParams
-from cs336_alignment.drgrpo_jgrader import r1_zero_reward_fn  # ← official reward fn
+from cs336_alignment.drgrpo_grader import r1_zero_reward_fn  # ← official reward fn
 
 
 # -----------------------
