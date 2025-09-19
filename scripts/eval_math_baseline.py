@@ -1,9 +1,10 @@
 # scripts/eval_math_baseline.py
-import argparse, json, math, re
+import argparse, json, re
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 from vllm import LLM, SamplingParams
+from cs336_alignment.drgrpo_jgrader import r1_zero_reward_fn  # ← official reward fn
 
 
 # -----------------------
@@ -35,82 +36,12 @@ def load_r1_zero_template() -> str:
 
 
 # -----------------------
-# Parsing & rewards
+# Format check / extraction (for format_reward only)
 # -----------------------
 ANSWER_RE = re.compile(r"<answer>\s*(.+?)\s*</answer>", re.IGNORECASE | re.DOTALL)
 
-def extract_final_answer(text: str) -> Optional[str]:
-    """
-    Prefer the r1_zero <answer>...</answer> block.
-    Fallback: LaTeX \\boxed{...} if the model ignored tags.
-    """
-    if not text:
-        return None
-
-    m = ANSWER_RE.findall(text)
-    if m:
-        ans = m[-1].strip().strip('"').strip("'")
-        return ans
-
-    # Fallback to \boxed{...}
-    m2 = re.findall(r"\\boxed\{([^}]*)\}", text)
-    if m2:
-        return m2[-1].strip()
-    return None
-
-
-def normalize_number(s: str) -> str:
-    """Normalize simple forms: integers, decimals, and a/b fractions."""
-    s = s.strip()
-    s = re.sub(r"\\boxed\{([^}]*)\}", r"\1", s)
-    s = re.sub(r"\\frac\{([^}]*)\}\{([^}]*)\}", r"\1/\2", s)
-    s = s.replace(",", "")
-    return s
-
-
-def to_float_if_numeric(s: str) -> Optional[float]:
-    s = normalize_number(s)
-    # fraction?
-    if re.fullmatch(r"[-+]?\d+\s*/\s*\d+", s):
-        num, den = s.replace(" ", "").split("/")
-        den = float(den)
-        if den == 0:
-            return None
-        return float(num) / den
-    # plain number
-    try:
-        return float(s)
-    except Exception:
-        return None
-
-
-def answer_equals(gt: str, pred: str) -> bool:
-    gt_norm = normalize_number(gt)
-    pr_norm = normalize_number(pred)
-
-    gt_float = to_float_if_numeric(gt_norm)
-    pr_float = to_float_if_numeric(pr_norm)
-
-    if gt_float is not None and pr_float is not None:
-        return math.isclose(gt_float, pr_float, rel_tol=1e-9, abs_tol=1e-9)
-
-    return gt_norm == pr_norm
-
-
-def make_reward_fn() -> Callable[[str, str], Dict[str, float]]:
-    """
-    Returns a callable that, given (generation, ground_truth_answer),
-    returns {"format_reward": 0|1, "answer_reward": 0|1}.
-    - format_reward = 1 iff a proper <answer>...</answer> block exists
-    - answer_reward = 1 iff the extracted final answer matches ground truth
-    """
-    def _fn(generation: str, gt_answer: str) -> Dict[str, float]:
-        has_answer_block = ANSWER_RE.search(generation or "") is not None
-        final = extract_final_answer(generation or "")
-        format_ok = 1.0 if has_answer_block else 0.0
-        ans_ok = 1.0 if (final is not None and answer_equals(gt_answer, final)) else 0.0
-        return {"format_reward": format_ok, "answer_reward": ans_ok}
-    return _fn
+def has_answer_block(text: Optional[str]) -> bool:
+    return ANSWER_RE.search(text or "") is not None
 
 
 # -----------------------
@@ -175,8 +106,8 @@ def main():
     ap.add_argument("--dataset_path", type=str, required=True,
                     help="JSON or JSONL file with MATH or GSM8K-style fields.")
     ap.add_argument("--model", type=str, default="Qwen/Qwen2.5-Math-1.5B-Instruct")
-    ap.add_argument("--temperature", type=float, default=0.7)
-    ap.add_argument("--top_p", type=float, default=0.95)
+    ap.add_argument("--temperature", type=float, default=1.0)  # per writeup
+    ap.add_argument("--top_p", type=float, default=1.0)        # per writeup
     ap.add_argument("--max_tokens", type=int, default=1024)
     ap.add_argument("--out_dir", type=str, default="runs/math_baseline")
     ap.add_argument("--seed", type=int, default=0)
@@ -193,7 +124,7 @@ def main():
     prompts = [p for p, _ in data_pairs]
     gold = [a for _, a in data_pairs]
 
-    # Sampling params — stop when </answer> is produced
+    # Sampling params — stop when </answer> is produced and KEEP the stop token
     sp = SamplingParams(
         temperature=args.temperature,
         top_p=args.top_p,
@@ -201,10 +132,10 @@ def main():
         seed=args.seed,
         n=1,
         stop=["</answer>"],
+        include_stop_str_in_output=True,
     )
 
     # Run model
-    reward = make_reward_fn()
     gens = evaluate_vllm(
         args.model, prompts, sp, max_batch_size=args.max_batch_size
     )
@@ -215,9 +146,10 @@ def main():
 
     with open(out_path, "w", encoding="utf-8") as f:
         for i, (prompt, gt, gen) in enumerate(zip(prompts, gold, gens)):
-            scores = reward(gen, gt)
-            fr = int(scores["format_reward"] > 0.5)
-            ar = int(scores["answer_reward"] > 0.5)
+            # format reward: did we see a proper <answer>...</answer>?
+            fr = 1 if has_answer_block(gen) else 0
+            # answer reward: official r1_zero parser (True/False)
+            ar = 1 if r1_zero_reward_fn(gen, gt) else 0
 
             if fr == 1 and ar == 1:
                 fmt1_ans1 += 1
@@ -228,7 +160,7 @@ def main():
             else:
                 fmt0_ans0 += 1
 
-            rec = {
+            rec: Dict = {
                 "id": i,
                 "prompt": prompt,
                 "generation": gen,
