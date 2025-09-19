@@ -5,6 +5,19 @@ from typing import Callable, Dict, List, Tuple
 
 from vllm import LLM, SamplingParams
 
+def _load_json_or_jsonl(path: Path) -> list[dict]:
+    if path.suffix == ".jsonl":
+        rows = []
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rows.append(json.loads(line))
+        return rows
+    else:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
 # -----------------------
 # Prompt & simple rewards
